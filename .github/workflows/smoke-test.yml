@@ -1,0 +1,46 @@
+name: SimplySign smoke test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke-test:
+    runs-on: windows-latest
+    environment: code-signing
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Build a disposable Windows executable
+        shell: pwsh
+        run: |
+          dotnet new console --name CertumSmokeTest --output smoke-src --force
+          dotnet publish smoke-src `
+            --configuration Release `
+            --runtime win-x64 `
+            --self-contained false `
+            --output smoke-out
+
+      - name: Sign with local action
+        uses: ./
+        with:
+          certum-username: ${{ secrets.CERTUM_USERNAME }}
+          certum-otp-uri: ${{ secrets.CERTUM_OTP_URI }}
+          certum-key-id: ${{ secrets.CERTUM_KEY_ID }}
+          files: smoke-out\CertumSmokeTest.exe
+
+      - name: Show Authenticode result
+        shell: pwsh
+        run: |
+          Get-AuthenticodeSignature 'smoke-out\CertumSmokeTest.exe' |
+            Format-List Status, StatusMessage, SignerCertificate, TimeStamperCertificate
+
+      - name: Upload signed smoke artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: certum-smoke-test-signed
+          path: smoke-out\CertumSmokeTest.exe
