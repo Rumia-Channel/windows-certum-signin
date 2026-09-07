@@ -1,0 +1,107 @@
+name: "Certum SimplySign Windows Signing"
+description: "Install SimplySign Desktop, authenticate with TOTP, sign Windows binaries, and verify Authenticode signatures."
+author: "Rumia-Channel"
+
+branding:
+  icon: "award"
+  color: "blue"
+
+inputs:
+  certum-username:
+    description: "SimplySign login/user ID."
+    required: true
+  certum-otp-uri:
+    description: "otpauth:// URI containing the SimplySign TOTP seed. Treat this as a long-lived secret."
+    required: true
+  certum-key-id:
+    description: "SHA-1 thumbprint of the Code Signing certificate."
+    required: true
+  files:
+    description: "One or more file paths/globs to sign, separated by newlines or semicolons. If empty, only setup/authentication is performed."
+    required: false
+    default: ""
+  timestamp-url:
+    description: "RFC 3161 timestamp server."
+    required: false
+    default: "http://timestamp.certum.pl"
+  simplysign-url:
+    description: "Direct URL of the SimplySign Desktop x64 MSI."
+    required: false
+    default: "https://files.certum.eu/software/SimplySignDesktop/Windows/9.4.3.90/SimplySignDesktop-9.4.3.90-64-bit-en.msi"
+  capture-diagnostics:
+    description: "Capture SimplySign screenshots on authentication failures. May expose the account identifier in artifacts/log context."
+    required: false
+    default: "false"
+
+outputs:
+  certificate-subject:
+    description: "Subject of the certificate selected by certum-key-id."
+    value: ${{ steps.cert.outputs.subject }}
+  certificate-thumbprint:
+    description: "Normalized certificate SHA-1 thumbprint."
+    value: ${{ steps.cert.outputs.thumbprint }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Require Windows runner
+      shell: pwsh
+      run: |
+        if (-not $IsWindows) {
+          throw "windows-certum-signin requires a Windows runner."
+        }
+
+    - name: Install SimplySign Desktop
+      shell: pwsh
+      env:
+        SIMPLYSIGN_URL: ${{ inputs.simplysign-url }}
+      run: |
+        & "${{ github.action_path }}\scripts\Install-SimplySign.ps1" -Url $env:SIMPLYSIGN_URL
+
+    - name: Configure SimplySign
+      shell: pwsh
+      run: |
+        & "${{ github.action_path }}\scripts\Configure-SimplySign.ps1"
+
+    - name: Authenticate SimplySign
+      shell: pwsh
+      env:
+        CERTUM_USERNAME: ${{ inputs.certum-username }}
+        CERTUM_OTP_URI: ${{ inputs.certum-otp-uri }}
+        CERTUM_KEY_ID: ${{ inputs.certum-key-id }}
+        CAPTURE_DIAGNOSTICS: ${{ inputs.capture-diagnostics }}
+      run: |
+        & "${{ github.action_path }}\scripts\Connect-SimplySign.ps1"
+
+    - name: Verify certificate availability
+      id: cert
+      shell: pwsh
+      env:
+        CERTUM_KEY_ID: ${{ inputs.certum-key-id }}
+      run: |
+        $thumbprint = ($env:CERTUM_KEY_ID -replace '\s','').ToUpperInvariant()
+        $cert = Get-ChildItem Cert:\CurrentUser\My -ErrorAction Stop |
+          Where-Object { ($_.Thumbprint -replace '\s','').ToUpperInvariant() -eq $thumbprint } |
+          Select-Object -First 1
+
+        if (-not $cert) {
+          throw "Certificate '$thumbprint' is not available in Cert:\CurrentUser\My after SimplySign authentication."
+        }
+
+        Write-Host "Certificate: $($cert.Subject)"
+        Write-Host "Expires: $($cert.NotAfter.ToString('u'))"
+        "subject=$($cert.Subject)" >> $env:GITHUB_OUTPUT
+        "thumbprint=$thumbprint" >> $env:GITHUB_OUTPUT
+
+    - name: Sign and verify files
+      if: ${{ inputs.files != '' }}
+      shell: pwsh
+      env:
+        CERTUM_KEY_ID: ${{ inputs.certum-key-id }}
+        SIGN_FILES: ${{ inputs.files }}
+        TIMESTAMP_URL: ${{ inputs.timestamp-url }}
+      run: |
+        & "${{ github.action_path }}\scripts\Sign-Files.ps1" `
+          -FileSpecs $env:SIGN_FILES `
+          -Thumbprint $env:CERTUM_KEY_ID `
+          -TimestampUrl $env:TIMESTAMP_URL
