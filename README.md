@@ -142,14 +142,6 @@ jobs:
 - `certificate-subject`
 - `certificate-thumbprint`
 
-## Private repository について
-
-この Action リポジトリを **private のまま** GitHub の別リポジトリから共有できる範囲には制限があります。GitHub の private action sharing は private repository 間向けで、public OSS repository から private action をそのまま `uses:` する用途には使えません。
-
-公開 OSS (`Rumia-Channel/Dantalian` など) から直接使う場合は、この Action リポジトリ自体を public にするのが最も単純です。Action のソースコード内には秘密値を保存せず、認証情報は利用側 repository の Secrets / Environment にのみ置いてください。
-
-private のまま使いたい場合は、利用側 workflow で別の認証情報を使ってこの repository を checkout し、local action として参照する方法もありますが、追加の PAT / GitHub App 管理が必要になるため通常は勧めません。
-
 ## Security notes
 
 - `CERTUM_OTP_URI` の `secret=` は TOTP の master seed です。漏洩したら SimplySign access を再 provisioning して無効化してください。
