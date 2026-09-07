@@ -125,6 +125,113 @@ jobs:
     # signtool sign ...
 ```
 
+## Tauri で使う
+
+Tauri v2 には Windows Code Signing の仕組みがあるため、Tauri プロジェクトではこの Action に `files` を渡して完成後のファイルを個別署名するより、**この Action では SimplySign のセットアップだけを行い、実際の署名タイミングは Tauri に任せる**方法を推奨します。
+
+Tauri の Windows signing 設定は次の 3 値を使用します。
+
+- `bundle.windows.certificateThumbprint`: `CERTUM_KEY_ID` と同じ SHA-1 thumbprint
+- `bundle.windows.digestAlgorithm`: `sha256`
+- `bundle.windows.timestampUrl`: Certum の RFC 3161 timestamp server
+
+この方法なら、Tauri の bundle pipeline 内でアプリ本体の EXE を署名してから Windows installer を生成・署名するため、**installer の外側だけ署名されて中に unsigned EXE が入る**ような順序ミスを避けられます。
+
+### GitHub Actions 例
+
+```yaml
+name: Build signed Tauri app
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    environment: code-signing
+
+    steps:
+      - uses: actions/checkout@v6
+
+      # Node / Rust / pnpm 等のセットアップはプロジェクトに合わせて追加
+
+      - name: Setup Certum SimplySign
+        uses: Rumia-Channel/windows-certum-signin@main
+        with:
+          certum-username: ${{ secrets.CERTUM_USERNAME }}
+          certum-otp-uri: ${{ secrets.CERTUM_OTP_URI }}
+          certum-key-id: ${{ vars.CERTUM_KEY_ID }}
+
+      - name: Create Tauri signing config
+        shell: pwsh
+        env:
+          CERTUM_KEY_ID: ${{ vars.CERTUM_KEY_ID }}
+        run: |
+          @{
+            bundle = @{
+              windows = @{
+                certificateThumbprint = $env:CERTUM_KEY_ID
+                digestAlgorithm = "sha256"
+                timestampUrl = "http://timestamp.certum.pl"
+              }
+            }
+          } |
+            ConvertTo-Json -Depth 10 |
+            Set-Content -Encoding utf8 src-tauri/tauri.signing.conf.json
+
+      - name: Build and sign Tauri app
+        shell: pwsh
+        run: pnpm tauri build --config src-tauri/tauri.signing.conf.json
+```
+
+`--config` で渡した設定は Tauri の通常の設定へ JSON Merge Patch としてマージされるため、既存の `tauri.conf.json` を CI 専用の thumbprint で書き換える必要はありません。
+
+npm を使う場合は例えば次のように置き換えられます。
+
+```powershell
+npm run tauri build -- --config src-tauri/tauri.signing.conf.json
+```
+
+Cargo CLI を直接使う場合:
+
+```powershell
+cargo tauri build --config src-tauri/tauri.signing.conf.json
+```
+
+### `tauri.windows.conf.json` に固定設定を書く場合
+
+`CERTUM_KEY_ID` を repository 内に置いても問題ない場合は、Tauri の platform-specific config を使う方法もあります。SHA-1 thumbprint 自体は秘密情報ではありません。
+
+`src-tauri/tauri.windows.conf.json`:
+
+```json
+{
+  "bundle": {
+    "windows": {
+      "certificateThumbprint": "YOUR_CERTIFICATE_SHA1_THUMBPRINT",
+      "digestAlgorithm": "sha256",
+      "timestampUrl": "http://timestamp.certum.pl"
+    }
+  }
+}
+```
+
+このファイルは Windows build 時に通常の Tauri 設定へ自動的にマージされます。
+
+> [!NOTE]
+> Tauri に署名を任せる場合、この Action の `files` input は指定しません。`files` を指定すると Action 側でも署名処理が走るため、Tauri の bundling 前後で意図しない二重署名になる可能性があります。
+
+参考:
+
+- [Tauri v2 - Windows Code Signing](https://v2.tauri.app/ja/distribute/sign/windows/)
+- [Tauri v2 - Configuration Files](https://v2.tauri.app/ja/develop/configuration-files/)
+
 ## Inputs
 
 | Input | 必須 | Default | 内容 |
