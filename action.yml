@@ -1,5 +1,5 @@
-name: "Certum SimplySign Windows Signing"
-description: "Install SimplySign Desktop, authenticate with TOTP, sign Windows binaries, and verify Authenticode signatures."
+name: "Certum SimplySign Code Signing"
+description: "Install SimplySign Desktop, authenticate with TOTP, dispatch code signing by file type, and verify signatures."
 author: "Rumia-Channel"
 
 branding:
@@ -11,27 +11,56 @@ inputs:
     description: "SimplySign login/user ID."
     required: true
   certum-otp-uri:
-    description: "otpauth:// URI containing the SimplySign TOTP seed. Treat this as a long-lived secret."
+    description: "Complete otpauth:// URI containing the SimplySign TOTP seed. Treat this as a long-lived secret."
     required: true
   certum-key-id:
-    description: "SHA-1 thumbprint of the Code Signing certificate."
+    description: "SHA-1 thumbprint of the Code Signing certificate in CurrentUser\\My."
     required: true
+
   files:
-    description: "One or more file paths/globs to sign, separated by newlines or semicolons. If empty, only setup/authentication is performed."
+    description: "Paths/globs separated by newlines or semicolons. By default each file is auto-dispatched by type."
     required: false
     default: ""
-  timestamp-url:
-    description: "RFC 3161 timestamp server."
+  signer:
+    description: "Signer applied to every entry in files. auto, authenticode, powershell, java, nuget, clickonce, office-vba, or air."
     required: false
-    default: "http://timestamp.certum.pl"
+    default: "auto"
+  targets:
+    description: "Advanced per-target list. One line per target: signer::path/glob. AIR may use air::input.airi=>output.air."
+    required: false
+    default: ""
+
+  timestamp-url:
+    description: "Timestamp server used by supported signers."
+    required: false
+    default: "http://time.certum.pl"
   simplysign-url:
     description: "Direct URL of the SimplySign Desktop x64 MSI."
     required: false
     default: "https://files.certum.eu/software/SimplySignDesktop/Windows/9.4.3.90/SimplySignDesktop-9.4.3.90-64-bit-en.msi"
   capture-diagnostics:
-    description: "Capture SimplySign screenshots on authentication failures. May expose the account identifier in artifacts/log context."
+    description: "Capture SimplySign screenshots on authentication failures. May expose the account identifier."
     required: false
     default: "false"
+
+  java-pkcs11-slot:
+    description: "SimplySign PKCS#11 slotListIndex used by jarsigner. Usually 0 when the account has one virtual card."
+    required: false
+    default: "0"
+  java-pkcs11-pin:
+    description: "Value passed to the PKCS#11 storepass parameter. SimplySign pinless cards still require a non-empty value."
+    required: false
+    default: "12345678"
+
+  office-sips-path:
+    description: "Path to the extracted x86 Microsoft Office Subject Interface Package. Required only for office-vba targets."
+    required: false
+    default: ""
+
+  air-adt-path:
+    description: "Optional path to AIR SDK adt/adt.bat. If omitted, PATH and AIR_HOME are searched."
+    required: false
+    default: ""
 
 outputs:
   certificate-subject:
@@ -79,9 +108,9 @@ runs:
       env:
         CERTUM_KEY_ID: ${{ inputs.certum-key-id }}
       run: |
-        $thumbprint = ($env:CERTUM_KEY_ID -replace '\s','').ToUpperInvariant()
+        $thumbprint = ($env:CERTUM_KEY_ID -replace '[^0-9A-Fa-f]','').ToUpperInvariant()
         $cert = Get-ChildItem Cert:\CurrentUser\My -ErrorAction Stop |
-          Where-Object { ($_.Thumbprint -replace '\s','').ToUpperInvariant() -eq $thumbprint } |
+          Where-Object { (($_.Thumbprint -replace '[^0-9A-Fa-f]','').ToUpperInvariant()) -eq $thumbprint } |
           Select-Object -First 1
 
         if (-not $cert) {
@@ -93,15 +122,27 @@ runs:
         "subject=$($cert.Subject)" >> $env:GITHUB_OUTPUT
         "thumbprint=$thumbprint" >> $env:GITHUB_OUTPUT
 
-    - name: Sign and verify files
-      if: ${{ inputs.files != '' }}
+    - name: Sign and verify targets
+      if: ${{ inputs.files != '' || inputs.targets != '' }}
       shell: pwsh
       env:
         CERTUM_KEY_ID: ${{ inputs.certum-key-id }}
         SIGN_FILES: ${{ inputs.files }}
+        SIGNER: ${{ inputs.signer }}
+        SIGN_TARGETS: ${{ inputs.targets }}
         TIMESTAMP_URL: ${{ inputs.timestamp-url }}
+        JAVA_PKCS11_SLOT: ${{ inputs.java-pkcs11-slot }}
+        JAVA_PKCS11_PIN: ${{ inputs.java-pkcs11-pin }}
+        OFFICE_SIPS_PATH: ${{ inputs.office-sips-path }}
+        AIR_ADT_PATH: ${{ inputs.air-adt-path }}
       run: |
-        & "${{ github.action_path }}\scripts\Sign-Files.ps1" `
+        & "${{ github.action_path }}\scripts\Sign-Targets.ps1" `
           -FileSpecs $env:SIGN_FILES `
+          -Signer $env:SIGNER `
+          -TargetSpecs $env:SIGN_TARGETS `
           -Thumbprint $env:CERTUM_KEY_ID `
-          -TimestampUrl $env:TIMESTAMP_URL
+          -TimestampUrl $env:TIMESTAMP_URL `
+          -JavaPkcs11Slot ([int]$env:JAVA_PKCS11_SLOT) `
+          -JavaPkcs11Pin $env:JAVA_PKCS11_PIN `
+          -OfficeSipsPath $env:OFFICE_SIPS_PATH `
+          -AirAdtPath $env:AIR_ADT_PATH
