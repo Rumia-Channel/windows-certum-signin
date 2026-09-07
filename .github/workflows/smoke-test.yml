@@ -15,7 +15,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Build a disposable Windows executable
+      - name: Build disposable targets
         shell: pwsh
         run: |
           dotnet new console --name CertumSmokeTest --output smoke-src --force
@@ -24,6 +24,7 @@ jobs:
             --runtime win-x64 `
             --self-contained false `
             --output smoke-out
+          Set-Content -LiteralPath smoke-out\signed-smoke.ps1 -Value 'Write-Output "signed"' -Encoding utf8
 
       - name: Sign with local action
         uses: ./
@@ -31,16 +32,20 @@ jobs:
           certum-username: ${{ secrets.CERTUM_USERNAME }}
           certum-otp-uri: ${{ secrets.CERTUM_OTP_URI }}
           certum-key-id: ${{ secrets.CERTUM_KEY_ID }}
-          files: smoke-out\CertumSmokeTest.exe
+          targets: |
+            auto::smoke-out\CertumSmokeTest.exe
+            powershell::smoke-out\signed-smoke.ps1
 
-      - name: Show Authenticode result
+      - name: Show Authenticode results
         shell: pwsh
         run: |
-          Get-AuthenticodeSignature 'smoke-out\CertumSmokeTest.exe' |
-            Format-List Status, StatusMessage, SignerCertificate, TimeStamperCertificate
+          Get-AuthenticodeSignature 'smoke-out\CertumSmokeTest.exe', 'smoke-out\signed-smoke.ps1' |
+            Format-List Path, Status, StatusMessage, SignerCertificate, TimeStamperCertificate
 
-      - name: Upload signed smoke artifact
+      - name: Upload signed smoke artifacts
         uses: actions/upload-artifact@v5
         with:
           name: certum-smoke-test-signed
-          path: smoke-out\CertumSmokeTest.exe
+          path: |
+            smoke-out\CertumSmokeTest.exe
+            smoke-out\signed-smoke.ps1
